@@ -8,6 +8,9 @@ import pandas as pd
 
 
 class ResultParser:
+    date_pat = re.compile('\d+-\d+-\d+')
+    head_pat = re.compile('application,')
+
     def __init__(self, log=None):
         logh = logging.StreamHandler(
             sys.stderr) if not log else logging.FileHandler(log, encoding="utf-8")
@@ -28,68 +31,71 @@ class ResultParser:
         # ele_pat = re.compile('(".+"|[^,]+)')
         stat = self.stat
         ele_id = {}
-        is_head = True
         with open(file) as f:
             for l in f.readlines():
                 # Check if it is datetime line
-                date_mat = re.compile('\d+-\d+-\d+').search(l)
+                date_mat = ResultParser.date_pat.search(l)
                 if date_mat:
                     print(f"processing: {date_mat.group(0)}")
                     continue
-                # Result data line
+                # parse line
                 ele = [e.strip() for e in l.strip().split(',')]
                 ele_size = len(ele)
-                if is_head:
+                # head line
+                head_mat = ResultParser.head_pat.search(l)
+                if head_mat:
                     for i in range(ele_size):
                         ele_id[ele[i]] = i
-                    is_head = False
                     if "status" not in ele_id:
                         break
-                else:
-                    try:
-                        if "success" not in ele[ele_id["status"]]:
-                            continue
-                        time = float(
-                            ele[ele_id["sum"]].removesuffix('min'))
-                        read = float(
-                            ele[ele_id["shuffle read stage"]].removesuffix('min'))
-                        write = float(
-                            ele[ele_id["shuffle write stage"]].removesuffix('min'))
-                        #
-                        mappers = int(ele[ele_id["numMappers"]])
-                        kvpairs = int(ele[ele_id["numKVPairs"]])
-                        keysize = int(ele[ele_id["KeySize"]])
-                        data = "{:.2}".format(
-                            mappers * kvpairs * keysize / 2 ** 40)
-                        apps = ele[ele_id["application"]]
-                        exes = ele[ele_id["numExecutors"]]
-                        cores = ele[ele_id["executorCores"]]
-                        if apps and ('Group' not in apps):
-                            print(file)
-                            exit(0)
-                        key_dat = f"{data},{apps},{exes},{cores}"
-                        #
-                        mode = ele[ele_id["mode"]]
-                        sparkucx = ele[ele_id.get("sparkucx_version", 0)]
-                        ucx = ele[ele_id.get("ucx_version", 0)]
-                        key_mod = f"{mode},{sparkucx},{ucx}"
-                        data_stat = stat.get(key_dat, {})
-                        mode_stat = data_stat.get(key_mod, [])
-                        mode_stat.append((time, read, write))
-                        data_stat[key_mod] = mode_stat
-                        stat[key_dat] = data_stat
-                    except ValueError as e:
-                        self.log.warning(l.strip())
-                        self.log.warning(repr(e))
+                    continue
+                # data line
+                try:
+                    if "success" not in ele[ele_id["status"]]:
                         continue
-                    except Exception as e:
-                        self.log.warning(l.strip())
-                        buf = ""
-                        for k, i in ele_id.items():
-                            buf = f"{buf}, {k}:{ele[i]}"
-                        self.log.warning(buf)
-                        self.log.error(f"Exception in {file}:\n\t{repr(e)}")
+                    time = float(
+                        ele[ele_id["sum"]].removesuffix('min'))
+                    read = float(
+                        ele[ele_id["shuffle read stage"]].removesuffix('min'))
+                    write = float(
+                        ele[ele_id["shuffle write stage"]].removesuffix('min'))
+                    #
+                    mappers = int(ele[ele_id["numMappers"]])
+                    kvpairs = int(ele[ele_id["numKVPairs"]])
+                    keysize = int(ele[ele_id["KeySize"]])
+                    data = "{:.2}".format(
+                        mappers * kvpairs * keysize / 2 ** 40)
+                    apps = ele[ele_id["application"]]
+                    exes = ele[ele_id["numExecutors"]]
+                    cores = ele[ele_id["executorCores"]]
+                    if apps and ('Group' not in apps):
+                        print(file)
                         exit(0)
+                    key_dat = f"{data},{apps},{exes},{cores}"
+                    #
+                    mode = ele[ele_id["mode"]]
+                    sparkucx = ele[ele_id.get("sparkucx_version", 0)]
+                    ucx = ele[ele_id.get("ucx_version", 0)]
+                    flyid = ele_id.get("maxReqsInFlight")
+                    fly = ele[flyid] if flyid else 1
+                    key_mod = f"{mode},{sparkucx},{ucx},{fly}"
+                    data_stat = stat.get(key_dat, {})
+                    mode_stat = data_stat.get(key_mod, [])
+                    mode_stat.append((time, read, write))
+                    data_stat[key_mod] = mode_stat
+                    stat[key_dat] = data_stat
+                except ValueError as e:
+                    self.log.warning(l.strip())
+                    self.log.warning(repr(e))
+                    continue
+                except Exception as e:
+                    self.log.warning(l.strip())
+                    buf = ""
+                    for k, i in ele_id.items():
+                        buf = f"{buf}, {k}:{ele[i]}"
+                    self.log.warning(buf)
+                    self.log.error(f"Exception in {file}:\n\t{repr(e)}")
+                    exit(0)
 
     def process(self, file=None):
         stat = self.stat
@@ -111,7 +117,7 @@ class ResultParser:
                 base_stat, base_pps = get_base(data_stat, 'Brianv1,')
             if not base_stat:
                 continue
-            for mode, mode_stat in data_stat.items():
+            for mode, mode_stat in sorted(data_stat.items(), key=lambda x: x[0]):
                 if mode_stat is base_stat:
                     continue
                 mode_pps = self.get_pps(zip(*mode_stat))
@@ -129,7 +135,7 @@ class ResultParser:
             # exit(0)
 
     def get_head(self):
-        return "Data/T,Application,Executors,Cores,Mode,Sparkucx,Ucx,Num,Time,Time50,Time80,Time99,Read,Read50,Read80,Read99,Write,Write50,Write80,Write99\n"
+        return "Data/T,Application,Executors,Cores,Mode,Sparkucx,Ucx,InFlight,Num,Time,Time50,Time80,Time99,Read,Read50,Read80,Read99,Write,Write50,Write80,Write99\n"
 
     def get_pps(self, stat_list):
         pps = []
@@ -139,9 +145,9 @@ class ResultParser:
                 n = len(ele)
                 pps.append(n)
             ele = sorted(ele)
-            n50 = (n - 1) * 50 // 100
-            n99 = (n - 1) * 80 // 100
-            n100 = (n - 1) * 99 // 100
+            n50 = n * 50 // 100
+            n99 = n * 80 // 100
+            n100 = n * 99 // 100
             pps.append(sum(ele) / n)
             pps.append(ele[n50])
             pps.append(ele[n99])
@@ -176,6 +182,8 @@ if __name__ == "__main__":
             if file.endswith("diff.csv"):
                 continue
             if not file.endswith(".csv"):
+                continue
+            if 'result_cx6_0706_sort' not in file :
                 continue
             path = f"{dir}/{file}"
             parser = ResultParser()
