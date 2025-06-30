@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-
-import re
 import json
-import os
 import lz4framed
+import os
+import re
 
 '''
 v=182   # last app id 
@@ -23,17 +22,21 @@ tcp
 
 
 class Abs:
+    """Abstract base class for tracking launch and finish times of events"""
     def __init__(self) -> None:
-        self.launch_jo = None
-        self.finish_jo = None
-        self._id = -1
-        self._launch_time = 0
-        self._finish_time = 0
+        self._launch_json = None  # JSON data from launch event
+        self._finish_json = None  # JSON data from finish event
+        self._id = -1  # Unique identifier
+        self._launch_time = 0  # Launch timestamp in milliseconds
+        self._finish_time = 0  # Finish timestamp in milliseconds
 
+    @property
     def id(self):
+        """Get the unique identifier"""
         return self._id
 
-    def total_time(self):
+    def duration(self):
+        """Calculate duration in seconds between launch and finish"""
         return round((self._finish_time - self._launch_time) / 1000, 1)
 
 
@@ -41,23 +44,32 @@ class Environment(Abs):
     inst = None
     objs = {}
     alias_keys = {
+        # UCX-related configurations
         'mode': 'spark.executorEnv.UCX_SOCKADDR_TLS_PRIORITY',
         'seg': 'spark.executorEnv.UCX_TCP_TX_SEG_SIZE',
         'tls': 'spark.executorEnv.UCX_TLS',
+        'mutex': 'spark.executorEnv.UCX_USE_MT_MUTEX',
+
+        # Spark shuffle configurations
         'listener': 'spark.shuffle.ucx.numListenerThreads',
         'client': 'spark.shuffle.ucx.numClientWorkers',
         'io': 'spark.shuffle.ucx.numIoThreads',
         'wake': 'spark.shuffle.ucx.useWakeup',
         'buffer': 'spark.shuffle.ucx.memory.preAllocateBuffers',
         'blocks': 'spark.shuffle.ucx.maxBlocksPerRequest',
+
+        # Reducer configurations
         'flysz': 'spark.reducer.maxSizeInFlight',
         'flyno': 'spark.reducer.maxReqsInFlight',
+
+        # Executor and driver configurations
         'cores': 'spark.executor.cores',
         'emem': 'spark.executor.memory',
         'dmem': 'spark.driver.memory',
         'driver': 'spark.driver.extraClassPath',
-        'mutex': 'spark.executorEnv.UCX_USE_MT_MUTEX',
         'para': 'spark.default.parallelism',
+
+        # Memory management configurations
         'm%': 'spark.memory.fraction',
         's%': 'spark.memory.storageFraction',
         'msh%': 'spark.shuffle.memoryFraction',
@@ -342,10 +354,10 @@ class AutoStats:
             lisn = key['listener']
             tls = key['tls']
             other = key['other']
-            app = sum((apps[i].total_time() for i in range(num)))/num
-            st0 = sum((apps[i].stage[0].total_time() for i in range(num)))/num
-            st1 = sum((apps[i].stage[1].total_time() for i in range(num)))/num
-            st2 = sum((apps[i].stage[2].total_time() for i in range(num)))/num
+            app = sum((app.duration() for app in apps))/num
+            st0 = sum((app.stage[0].duration() for app in apps))/num
+            st1 = sum((app.stage[1].duration() for app in apps))/num
+            st2 = sum((app.stage[2].duration() for app in apps))/num
             print("|{:<8s}|{:>4s}|{:>4s}|{:>8s}|{:>8s}|{:>8.1f}|{:>8.1f}|{:>8.1f}|{:>8.1f}|{:>6d}|".format(
                 head, core, lisn, tls, other, app, st0, st1, st2, num))
 
@@ -393,9 +405,9 @@ class GroupStats:
             stat['stage'] = [0, 0, 0]
             stat['env'] = app.env.prop
         stat['num'] += 1
-        stat['app'] += app.total_time()
+        stat['app'] += app.duration()
         for i in range(3):
-            stat['stage'][i] += app.stage[i].total_time()
+            stat['stage'][i] += app.stage[i].duration()
 
     def show(self):
         print("|{:<8s}|{:>4s}|{:>4s}|{:>8s}|{:>8s}|{:>8s}|{:>8s}|{:>8s}|{:>8s}|".format(
@@ -470,10 +482,10 @@ if __name__ == '__main__':
                 key = app.env.prop
                 log = "|{:<18d}|{:>4s}|{:>4s}|{:>8s}|{:>8s}|".format(
                     app.id(), key['cores'], key['listener'], key['tls'], key['other'])
-                log = "{}{:>8.1f}|".format(log, app.total_time())
+                log = "{}{:>8.1f}|".format(log, app.duration())
                 for sid in range(3):
                     stat = Application.inst.stage[sid]
-                    log = "{}{:>8.1f}|".format(log, stat.total_time())
+                    log = "{}{:>8.1f}|".format(log, stat.duration())
             print(log)
         except:
             print(f"ignore {Application.inst.id()}")
